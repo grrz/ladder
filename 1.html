@@ -1,0 +1,1159 @@
+<html>
+<head>
+<meta charset="utf-8">
+
+<!--[if IE]><script type="text/javascript" src="excanvas.js"></script><![endif]-->
+<script type="application/x-javascript" src="scriptaculous/prototype.js"></script>
+<!-- script type="text/javascript" src="scriptaculous/scriptaculous.js"></script -->
+<script type="application/x-javascript" src="scriptaculous/sound.js"></script>
+<!-- #> <script type="application/x-javascript"> -->
+<!-- #(1_screen.js) --><script type="application/x-javascript" src="1_screen.js"></script><!-- /# -->
+<!-- #(1_console.js) --><script type="application/x-javascript" src="1_console.js"></script><!-- /# -->
+<!-- #(1_menu.js) --><script type="application/x-javascript" src="1_menu.js"></script><!-- /# -->
+<!-- #(1_div.js) --><script type="application/x-javascript" src="1_div.js"></script><!-- /# -->
+<!-- #(1_chatter.js) --><script type="application/x-javascript" src="1_chatter.js"></script><!-- /# -->
+<!-- ## -->
+<script type="application/x-javascript">
+<!-- /# -->
+
+// баги:
+// - нестабильно отлавливается пролет над/под шаром
+// - избыточно отслеживается столкновение с шаром, как следствие не совсем корректно работает удача
+//
+// мысли:
+// 6. рандомные уровни?
+// 7. переделать способ отрисовки?
+// 9. переделать код в (псевдо) объекты?
+// 23. управление игроком с помощью мыши?
+// 31. изменение геометрии уровня по триггерам
+// 
+// сделано:
+// 1. уровень может содержать инфо о масштабе
+// 2. !!! переделать работу с клавиатурой
+// 8. вынести код консоли в отдельный файл
+// 8.3	почистить код консоли: перенести игровые функции сюда
+// 12. подъемник ^
+// 13. направляющие < >
+// 15. вынести код экрана и уровней (xml?) в отдельные файлы
+// 16. уменьшение числа шаров "o"
+// 19. счетчик неудач
+// 17.3 kbd_focus
+// 21. удача
+// 17. сделать переменные:
+// 17.1 game
+// 17.2 env
+// 4. управление скоростью кнопками
+// 18. направленный подъемник для шаров \ /
+// 22. опция -- столкновение шаров
+// 22.1 делается через доп массив, на котором отмечаются шары. это улучшит работу удачи и начисления очков
+// 20. история команд в консоли кнопками  и 
+// 8.1	make чтобы собиралось в один файл:
+// 8.2	без сборки должно работать и так
+// 24. после смерти шары не сбрасываются, + опция
+// 3.1 выбор набора уровней 
+// 25. унифицирован процесс загрузки параметров уровней и наборов
+// 26. @ увеличивает число шаров на 1 или сколько задано
+// 3.3 выбор уровня из не входящих в набор
+// 3.2 выбор уровня из набора
+// 27. случайный выбор из нескольких начальных положений игрока
+// 3. меню:
+// 3.4 управление скоростью
+// 3.5 управление масштабом
+// 3.6 отключение консоли
+// 11. фишки на элементах html
+// 28. прозрачные стенки уровня
+// 14. ball chatter
+// 29. экран "%"
+// 30. названия уровней
+//
+
+//// interface vars
+var env = {
+  span_score: null,
+  span_lives: null,
+  span_fails: null,
+  span_kbd: null,
+  span_mapname: null,
+  console: null,
+  console_visible: false
+};
+
+//// game vars
+game_defaults = {
+  speed: 100, // ms per move
+  spl: 100, // score per live
+  score: 0,
+  lives: 7,
+  fails: 0,
+  
+  chatter: 1 // enable ball chatter
+};
+
+game_level_defaults = {
+  luck: 1,
+  score_bonus: 45, // score for +
+  score_bonus_big: 60, // score for @
+  bonus_big_adds_ball: 0, // @ increases balls_max by value of bonus_big_adds_ball
+  ball_passes_lightstep: 1, // '-' does not affect ball movement
+  wraparound_walls: 0, // sides of level are wrapped around
+  score_O1: 2, // score for ball below player 1 step
+  score_O2: 1, // score for ball above player 2 steps
+  score_O: 5, // score for ball above player's head 1 step
+  balls_encount: 0, // have balls being obstacles to each other or not
+  balls_restart: 0, // 1 = reset balls if player fails
+  balls_max: 0, // maximum available balls
+  gravestones: 1 // place gravestones
+};
+
+var game = {
+  speed: 100,
+  speed_states: [10, 20, 50, 60, 80, 90, 100, 110, 120, 130, 150, 200, 300, 500, 1000, 2000], // variations for speed switch
+  scale_states: [1, 1.2, 1.5, 1.8, 2, 2.5, 3, 4], // variations for scale switch
+  
+  // game vars
+  gs: '', // game status: r for run, c for complete level, d for death, f for fail, w for win
+  
+  level: '',
+  levelset: '',
+  levelsetindex: 0,
+
+  jump: [-1, -1, 0, 0, 1, 1], // jump sequence
+  balls_jump: [ // balls jump sequence for ^ \ /
+    // specials for \ /
+    { seq: [{x: -1, y: -1},  {x: -1, y: -1},  {x: -1, y:  0},  {x: -1, y:  0},  {x: -1, y:  1},  {x: -1, y:  1} ], after: 'l' },
+    { seq: [{x:  1, y: -1},  {x:  1, y: -1},  {x:  1, y:  0},  {x:  1, y:  0},  {x:  1, y:  1},  {x:  1, y:  1} ], after: 'r' },
+    
+    // random for ^
+    { seq: [{x: 0, y: -1},  {x: -1, y: -1},  {x: -1, y:  0},  {x: -1, y:  0},  {x: -1, y:  1},  {x: -1, y:  1} ], after: 'l', rev: 3 },
+    { seq: [{x: 0, y: -1},  {x:  1, y: -1},  {x:  1, y:  0},  {x:  1, y:  0},  {x:  1, y:  1},  {x:  1, y:  1} ], after: 'r', rev: 2 },
+    { seq: [{x: 0, y: -1},  {x:  0, y: -1},  {x: -1, y: -1},  {x:  0, y:  0},  {x: -1, y:  1},  {x: -1, y:  1},  {x:  0, y:  1}], after: 'l', rev: 5 },
+    { seq: [{x: 0, y: -1},  {x:  0, y: -1},  {x:  1, y: -1},  {x:  0, y:  0},  {x:  1, y:  1},  {x:  1, y:  1},  {x:  0, y:  1}], after: 'r', rev: 4 }
+  ]
+};
+
+var player = {
+  // action vars
+  orig: [], // initial player position
+  x: 0, // current player position
+  y: 0,
+  b: ' ', // what's behind player
+  s: '',  // state
+  j: 0,   // jump state
+ 
+  // kbd
+  kbd_jump: 0,
+  kbd_mode: 'c',
+  jump_dir: '',
+  
+  restart: function () {
+    var i = Math.floor(Math.random() * this.orig.length);
+    this.x = this.orig[i].x;
+    this.y = this.orig[i].y;
+
+    this.b = ' ';
+    this.s = '';
+    this.j = '';
+    this.jump_dir = '';
+
+    start_effect('pointer2', this.x, this.y, 0);
+  }
+};
+
+var ball_source = [];
+var balls = [];
+
+// game levels and levelsets
+var level = {};
+var levelset = {};
+
+var map;
+var map_balls;
+
+
+//клавиатура
+var kbd_focus = 'p'; // may be 'p' for player, 'c' for console, 'm' for menu
+
+function kbd_down(evt) {
+
+  switch (evt.keyCode) {
+   case 192: // `
+    if (kbd_focus != 'c') {
+      kbd_focus = 'c';
+
+      menu_off();
+      console_on();
+    } else {
+      kbd_focus = 'p';
+
+      console_off();
+    }
+//    env.span_kbd.innerHTML = kbd_focus;
+    return false;
+
+   case 27: // esc
+    if (kbd_focus != 'm') {
+      kbd_focus = 'm';
+
+      console_off();
+      menu_on();
+    } else {
+      kbd_focus = 'p';
+
+      menu_off();
+    }
+//    env.span_kbd.innerHTML = kbd_focus;
+    return false;
+
+   case 113: // F2: console on/off
+    env.console_visible = ! env.console_visible;
+    env.console.style.display = env.console_visible ? 'block' : 'none';
+    return false;
+
+   case 112: // F1: where am I?
+    start_effect('pointer2', player.x, player.y);
+    return false;
+
+   case 123: // F12: test
+//    chatter(balls[0].x, balls[0].y, {data: 'did you see that?', dir: balls[0].s});
+//    chatter('luck', -1);
+//    Sound.play("snap1.wav");
+   return false;
+  }
+
+  switch(kbd_focus) {
+    case 'p': return kbd_player_d(evt.keyCode); break;
+    case 'c': return kbd_console_d(evt.keyCode); break;
+    case 'm': return kbd_menu_d(evt.keyCode); break;
+  }
+}
+
+function kbd_up(evt) {
+//  env.span_kbd.innerHTML = evt.keyCode;
+  switch(kbd_focus) {
+    case 'p': return kbd_player_u(evt.keyCode); break;
+    case 'c': return kbd_console_u(evt.keyCode); break;
+    case 'm': return kbd_menu_u(evt.keyCode); break;
+  }
+}
+
+function kbd_player_d(keycode) {
+  switch(keycode) {
+   case 32: player.kbd_jump = 1; break;
+   case 38: case 82: player.s = 'u'; break;
+   case 40: case 70: player.s = 'd'; break;
+   case 37: case 68: player.s = 'l'; break;
+   case 39: case 71: player.s = 'r'; break;
+
+   // speed control
+   case 187: game_incspeed(); break; // +
+   case 189: game_decspeed(); break; // -
+
+   case 8: break; // prevent browser's back action, I hate it
+
+   default: return true;
+  }
+  
+  player.jump_dir = player.s;
+
+  return false;
+}
+
+function kbd_player_u(keycode) {
+  switch(keycode) {
+   case 32: player.kbd_jump = player.kbd_jump == 1 ? 3 : 0; break;
+
+   case 38: case 82:
+   case 40: case 70:
+   case 37: case 68:
+   case 39: case 71:
+    if (player.kbd_mode == 'm')
+      if (player.j == 0)
+        player.s = '';
+      else 
+        player.jump_dir = '';
+   break;
+
+   default: return true;
+  }
+  
+  return false;
+}
+
+// gameplay
+// 1. load level (put on screen, init objects)
+// 2. perform action
+// 3. draw
+
+
+function check_map(x, y) {
+  if (y < 0 || y >= map.length) return '#';
+  
+  if (x < 0)
+    if (game.wraparound_walls)
+      return map[y][x + map[y].length]
+    else
+      return '#';
+  
+  if (x >= map[y].length)
+    if (game.wraparound_walls)
+      return map[y][x - map[y].length]
+    else
+      return '#';
+
+  return map[y][x];
+}
+
+function check_map_b(x, y) {
+  if (y < 0 || y >= map.length) return '#';
+  
+  if (x < 0)
+    if (game.wraparound_walls)
+      return map[y][x + map[y].length]
+    else
+      return '#';
+  
+  if (x >= map[y].length)
+    if (game.wraparound_walls)
+      return map[y][x - map[y].length]
+    else
+      return '#';
+
+  return (game.balls_encount && map_balls[y][x]) ? '#' : map[y][x];
+}
+
+// draw map
+function draw_map() {
+  var map_width = map[0].length;
+  var map_height = map.length;
+  screen_set_geometry(map_width, map_height);
+  for (var y = 0; y < map_height; y++)
+    for (var x = 0; x < map_width; x++)
+      screen_draw_charc(x, y, map[y][x])
+}
+
+function game_resetlevel(n) {
+  // emptying balls map
+  if (game.balls_restart) {
+    for (var i = 0; i < balls.length; i++)
+      map_balls[balls[i].y][balls[i].x] = 0;
+
+    balls = [];
+
+    draw_map();
+  } else {
+    screen_draw_charc(player.x, player.y, player.b); // %%% bad practice: drawing function shouldn't be here
+  }
+
+  player.restart();
+  
+  return true;
+}
+
+function game_loadlevel(n) {
+  var x;
+  var y;
+  var ch;
+  
+  var map_width = 0;
+  var map_height = 0;
+  
+  if (level[n] == null) {
+    wc('no such level: ' + n, "game_loadlevel()", 'FF0000');
+    return false;
+  }
+  
+  map = [];
+  map_balls = [];
+  ball_source = [];
+  balls = [];
+  player.orig = [];
+  player.s = '';
+  player.b = ' ';
+  
+  map_height = level[n].map.length;
+  
+  for (y = 0; y < level[n].map.length; y++) {
+    map[y] = new Array();
+    map_balls[y] = new Array();
+    if (level[n].map[y].length > map_width) map_width = level[n].map[y].length;
+
+    for (x = 0; x < level[n].map[y].length; x++) {
+      ch = level[n].map[y].charAt(x);
+      
+      switch(ch) {
+        case 'P':
+          player.orig.push({x: x, y: y});
+          map[y][x] = ' ';
+        break;
+
+        case 'I':
+          map[y][x] = String.fromCharCode(11);
+        break;
+
+        case 'U':
+          ball_source.push({x: x, y: y});
+          map[y][x] = ch;
+        break;
+
+        case '`':
+          map[y][x] = '\\';
+        break;
+
+        default:
+          map[y][x] = ch;
+      }
+
+      map_balls[y][x] = 0;
+    }
+  }
+  
+  if (player.orig.length == 0) {
+    wc('level ' + n + ' error: no player location!', "game_loadlevel()", 'FF0000');
+    return false;
+  }
+  
+  player.restart();
+  
+  // fill in shortened rows of map with spaces
+  for (y = 0; y < map_height; y++)
+    for (x = level[n].map[y].length; x < map_width; x++) {
+      map[y][x] = " ";
+      map_balls[y][x] = 0;
+    }
+  
+  // load game vars specific for a level
+  var _ld = game.levelset != '' ? levelset[game.levelset] : {};
+  for (var v in game_level_defaults)
+    game[v] = level[n][v] != null ? level[n][v] : _ld[v] != null ? _ld[v] : game_level_defaults[v];
+  game.level = n;
+
+  wc(n + ', ' + map_width + '&times;' + map_height + ', balls_max = ' + game.balls_max + ', sources: ' + ball_source.length + ', luck: ' + game.luck + ' of 100', "game_loadlevel()");
+  
+  if (level[n].scale != null)
+    screen_set_scale(level[n].scale, level[n].scale);
+
+  draw_map();
+  
+  gravestone_cleanup();
+
+  if (game.wraparound_walls)
+    env.b.style['border-right'] = env.b.style['border-left'] = '1px dashed #00CC00'; // %%% const style
+  else
+    env.b.style['border-right'] = env.b.style['border-left'] = '1px solid #CCCCCC'; // %%% const style
+
+  env.span_mapname.innerHTML = n + (level[n].title ? ': ' + level[n].title : '');
+  
+  return true;
+}
+
+function game_loadlevel_standalone(n) {
+  game.levelset = '';
+  game.levelsetindex = 0;
+
+  if (! game_loadlevel(n)) {
+    game.gs = '';
+    return false;
+  }
+
+  for (var v in game_defaults) game[v] = game_defaults[v];
+
+  for (var v in game_level_defaults)
+    game[v] = level[n][v] != null ? level[n][v] : game_level_defaults[v];
+
+  game.lives = '∞';
+
+  env.span_score.innerHTML = game.score;
+  env.span_lives.innerHTML = game.lives;
+  env.span_fails.innerHTML = game.fails;
+ 
+  if (game.gs != 'r') {
+    wc('go!');
+    game.gs = 'r';
+    window.setTimeout("game_action()", game.speed);
+  }
+  
+  return true;
+}
+
+// actually, this is the start of the game or demo
+function game_loadlevelset(ls) {
+  if (levelset[ls] == null) {
+    wc('no such levelset: ' + ls, "game_loadlevelset()", 'FF0000');
+    return false;
+  }
+  
+  game.levelset = ls;
+  game.levelsetindex = 0;
+  game.level = levelset[ls].levels[0];
+
+  for (var v in game_defaults)
+    game[v] = levelset[ls][v] != null ? levelset[ls][v] : game_defaults[v];
+ 
+  if (game.lives == '#') game.lives = '∞';
+ 
+  env.span_score.innerHTML = game.score;
+  env.span_lives.innerHTML = game.lives;
+  env.span_fails.innerHTML = game.fails;
+  
+  wc(ls + ', maps: ' + levelset[ls].levels.join(' '), "game_loadlevelset()");
+  if (! game_loadlevel(levelset[ls].levels[0])) {
+    game.gs = '';
+    return false;
+  }
+
+  if (game.gs != 'r') {
+    wc('go!');
+    game.gs = 'r';
+    window.setTimeout("game_action()", game.speed);
+  }
+  
+  return true;
+}
+
+function game_incspeed() {
+  for (var i = game.speed_states.length - 1; i >= 0; i--) {
+    if (game.speed > game.speed_states[i]) {
+      wc('speed changed from ' + game.speed + ' to ' + game.speed_states[i]);
+      game.speed = game.speed_states[i];
+      start_effect('score', player.x, player.y, { score: '^ ' + game.speed, color: 'white' });
+      return;
+    }
+  }
+}
+
+function game_decspeed() {
+  for (var i = 0; i < game.speed_states.length; i++) {
+    if (game.speed < game.speed_states[i]) {
+      wc('speed changed from ' + game.speed + ' to ' + game.speed_states[i]);
+      game.speed = game.speed_states[i];
+      start_effect('score', player.x, player.y, { score: 'v ' + game.speed, color: 'white' });
+      return;
+    }
+  }
+}
+
+
+//// action
+
+function score_add(ch) {
+  var old_score = game.score;
+  
+  var n = 0;
+  switch (ch) {
+   case 'O1': n = game.score_O1; break;
+   case 'O2': n = game.score_O2; break;
+   case 'O':  n = game.score_O; break;
+   case '+':  n = game.score_bonus; break;
+   case '@':  n = game.score_bonus_big;
+     game.balls_max += game.bonus_big_adds_ball;
+     if (game.bonus_big_adds_ball > 0) chatter('bonus_big_adds_ball');
+   break;
+  }
+
+  if (! n) return;
+
+  game.score += n;
+  env.span_score.innerHTML = game.score;
+  switch (ch) { case '+': case '@': start_effect('score', player.x, player.y, {score: n}); }
+  wc('score +' + n + ' for "' + ch + '"', null, 'FFFF00');
+  var l = Math.floor(game.score / game.spl) -  Math.floor(old_score / game.spl);
+  if (l) {
+    if (game.lives != '∞') game.lives += l;
+    env.span_lives.innerHTML = game.lives;
+    wc('life + ' + l + '!', null, 'FFFF00');
+    start_effect('score', player.x, player.y, { score: '&hearts;', color: '#FF0000', size: 16, height: 80 });
+  }
+//  Sound.play("snap1.wav");
+}
+
+function game_action_player() {
+  // perform player move
+  var is_jump = 0;
+  var new_x = player.x;
+  var new_y = player.y;
+  var ground;
+
+  if (game.gs != 'r') return;
+
+  if (player.b != '%') screen_draw_charc(player.x, player.y, player.b);
+  
+  // to let constantly press space for multiple jumping
+  if (player.kbd_jump) { is_jump = 1; player.kbd_jump = player.kbd_jump == 3 ? 0 : 2 }
+
+//  wc('player: ' + player.x + ',' + player.y + ' j' + player.j + '/' + is_jump);
+  
+  switch (player.b) {
+   case '.':
+    // random thing
+    
+    var chance = Math.random() * 100;
+    
+    if (chance < 20) player.s = 'l' // 40% for move in either direction
+    else if (chance < 40) player.s = 'r'
+    else if (chance < 60) player.s = ''; // 20% for stop
+
+    if ((chance % 10) < 4) { // 40% for a jump
+      player.j = 1;
+      is_jump = 2;
+    }
+
+//    wc('random: j=' + player.j + ', s=' + player.s);
+   break;
+  
+   case 'H':
+    // ladder stops jump
+    if (player.j > 0) player.s = ''; // %%% even when a dir key is down - not good
+    player.j = 0;
+   break;
+   
+   case '$':
+    // end of level
+    wc('GOAL', null, 'FFFFFF');
+    game.gs = 'c';
+    return;
+   break;
+
+   case String.fromCharCode(11):
+    // deadly thing
+    wc('doh', null, '999999');
+    game.gs = 'd';
+    chatter('doh', null, {d: 10});
+    start_effect('sparkles', player.x, player.y, { dir: player.s });
+    return;
+   break;
+  }
+  
+  if (player.j > 0) {
+    // jumping
+    new_y += game.jump[player.j];
+    switch (player.s) {
+      case 'l': new_x--; break;
+      case 'r': new_x++; break;
+    }
+
+    var brick = check_map(new_x, new_y);
+    switch (brick) {
+      case '=': case '-': case '#':
+        if (player.kbd_mode == 'm') player.s = player.jump_dir;
+        player.j = 0;
+        if (is_jump == 2) is_jump = 0;
+//        player.s = ''; // if uncomment, player would stop on a raised platform after jump -- as in classic
+        new_x = player.x;
+        new_y = player.y;
+//        wc('bump', 'game_action()');
+      break;
+  
+      default:
+        player.y = new_y;
+
+        if (new_x < 0)
+          player.x = new_x + map[new_y].length
+        else if (new_x >= map[new_y].length)
+          player.x = new_x - map[new_y].length
+        else
+          player.x = new_x;
+    }
+  }
+
+  if (player.j == 0) {
+    
+    if (player.b == 'H') {
+      // on ladder
+
+      if (is_jump == 1) new_y += game.jump[0];
+      switch (player.s) {
+        case 'l': new_x--; break;
+        case 'r': new_x++; break;
+        case 'd': new_y++; break;
+        case 'u': if (is_jump == 0) new_y--; break;
+      }
+      
+      var brick = check_map(new_x, new_y);
+      switch (brick) {
+        case '-':
+          // may move, but ground is gone
+          if (player.s == 'd') {
+            map[new_y][new_x] = ' ';
+            screen_draw_charc(new_x, new_y, ' ');
+            player.s = '';
+            break;
+          };
+      
+        case '=': case '#':
+          is_jump = 0;
+          player.s = '';
+        break;
+  
+        default:
+          player.y = new_y;
+
+          if (new_x < 0)
+            player.x = new_x + map[new_y].length
+          else if (new_x >= map[new_y].length)
+            player.x = new_x - map[new_y].length
+          else
+            player.x = new_x;
+      };
+
+    } else {
+
+      ground = check_map(player.x, player.y + 1);
+    
+      switch (ground) {
+      case '-':
+        // may move, but ground is gone
+        map[player.y + 1][player.x] = ' ';
+        screen_draw_charc(player.x, player.y + 1, ' ');
+      
+      case '=': case '#':
+        // may move
+        if (is_jump == 1) new_y += game.jump[0];
+        switch (player.s) {
+          case 'l': new_x--; break;
+          case 'r': new_x++; break;
+        }
+  
+        var brick = check_map(new_x, new_y);
+        switch (brick) {
+          case '=': case '-': case '#':
+            is_jump = 0;
+            player.s = '';
+          break;
+  
+          default:
+            player.y = new_y;
+
+            if (new_x < 0)
+              player.x = new_x + map[player.y].length
+            else if (new_x >= map[player.y].length)
+              player.x = new_x - map[player.y].length
+            else
+              player.x = new_x;
+        }
+  
+      break;
+  
+      // just falling
+      default:
+        player.y++;
+        is_jump = 0;
+      }
+    }
+    
+    if (is_jump)
+      player.j = 1;
+  } else
+    if (is_jump != 2)
+      if (++player.j >= game.jump.length) {
+        if (player.kbd_mode == 'm') player.s = player.jump_dir;
+        player.j = 0;
+      }
+  
+  player.b = map[player.y][player.x];
+  
+
+  // eating
+  switch (player.b) {
+   case '+': case '@':
+    score_add(player.b);
+    map[player.y][player.x] = ' ';
+    player.b = ' ';
+    break;
+
+   case 'o':
+    game.balls_max--;
+    map[player.y][player.x] = ' ';
+    player.b = ' ';
+    chatter('o');
+  }
+
+  if (map_balls[player.y][player.x] == 1) {
+    // player hit a ball!
+    if (Math.random() * 100 < game.luck) {
+      wc('you are lucky!', null, '999999');
+    } else {
+      wc('got ball', null, '999999'); // + b + ', x = ' + new_x + ', y = ' + new_y
+      game.gs = 'd';
+      start_effect('sparkles', player.x, player.y, { dir: player.s });
+    }
+  }
+
+  if (player.b != '%') screen_draw_char(player.x, player.y, 9);
+}
+
+function game_action_balls() {
+  var new_x;
+  var new_y;
+  var ground;
+  
+  if (balls.length < game.balls_max) {
+    // create a ball if there are < balls_max
+    var nok = true;
+
+    while (nok) {
+      var bs = Math.floor(Math.random() * ball_source.length);
+      if ((ball_source[bs].x == player.x) && (ball_source[bs].y == player.y)) {
+//        wc('ouch ' + player.x + ', ' + player.y);
+        if (ball_source.length <= 1) nok = false; // else try again
+      } else {
+        balls.push({
+          x: ball_source[bs].x,
+          y: ball_source[bs].y,
+          s: '', // status: l, r, d (for ladders), j (jump), - (death)
+          b: map[ball_source[bs].y][ball_source[bs].x],
+          jn: 0, // jump sequence number
+          j: -1, // jump state
+          _s: 0 // player score count
+        });
+        nok = false;
+      }
+    }
+
+  }
+  
+  var redo = -1;
+  for (var b = 0; b < balls.length; b++) {
+    // perform ball action
+
+    if (balls[b].b != '%') screen_draw_charc(balls[b].x, balls[b].y, balls[b].b);
+    new_x = balls[b].x;
+    new_y = balls[b].y;
+    map_balls[new_y][new_x] = 0;
+
+    switch (balls[b].b) {
+     case '^':
+      balls[b].jn = Math.floor(Math.random() * (game.balls_jump.length - 2)) + 2;
+      balls[b].s = 'j';
+      balls[b].j = 0;
+     break;
+
+     case '\\':
+      balls[b].jn = 0;
+      balls[b].s = 'j';
+      balls[b].j = 0;
+     break;
+
+     case '/':
+      balls[b].jn = 1;
+      balls[b].s = 'j';
+      balls[b].j = 0;
+     break;
+    }
+
+    if (balls[b].s == 'j') {
+      // jumping
+      switch (balls[b].b) {
+       case '<': case '>': balls[b].s = ''; break;
+       case 'H': if (Math.random() < 0.4) balls[b].s = ''; // %%% const for H encount
+      }
+      
+      if (balls[b].s == 'j') {
+      
+        new_x += game.balls_jump[balls[b].jn].seq[balls[b].j].x;
+        new_y += game.balls_jump[balls[b].jn].seq[balls[b].j].y;
+    
+        var brick = check_map_b(new_x, new_y);
+        switch (brick) {
+          case '=': case '-': case '#':
+            if (game.balls_jump[balls[b].jn].rev && game.balls_jump[balls[b].jn].seq[balls[b].j].y <= 0) {
+              balls[b].jn = game.balls_jump[balls[b].jn].rev;
+
+              if (b != redo) { // eliminates ball from passing step when bouncing
+                redo = b; // prevents game stuck when the ball jumped between two bricks
+                b--;
+                continue
+              }
+            }
+            
+            new_x = balls[b].x;
+//            brick = check_map_b(new_x, new_y);
+//            if (brick == '=' || brick == '-' || brick == '#') {
+              balls[b].s = game.balls_jump[balls[b].jn].after;
+              new_y = balls[b].y;
+              break;
+//            }
+          
+          default:
+            balls[b].y = new_y;
+  
+            if (new_x < 0)
+              balls[b].x = new_x + map[new_y].length
+            else if (new_x >= map[new_y].length)
+              balls[b].x = new_x - map[new_y].length
+            else
+              balls[b].x = new_x;
+    
+            map_balls[new_y][balls[b].x] = 1;
+        }
+      }
+    }
+
+    if (balls[b].s != 'j') {
+    
+      ground = check_map_b(balls[b].x, balls[b].y + 1);
+    
+      switch (ground) {
+       case 'H': // ladder
+        if (balls[b].s != 'd') {
+          if (Math.random() >= 0.5) { // %%% const for H under ball
+            balls[b].s = 'd';
+            new_y++;
+            break;
+          }
+        } else {
+          new_y++;
+          break;
+        }
+
+       case '-': case '=': case '#': // case 'H':
+        // may move
+        switch (balls[b].b) {
+         case '<': balls[b].s = 'l'; break
+         case '>': balls[b].s = 'r'; break
+        }
+        
+        switch (balls[b].s) {
+         case 'l': new_x--; break;
+         case 'r': new_x++; break;
+         default:
+          // falled
+          if (Math.random() >= 0.5) {
+            balls[b].s = 'l';
+            new_x--;
+          } else {
+            balls[b].s = 'r';
+            new_x++;
+          }
+        }
+    
+        var brick = check_map_b(new_x, new_y);
+        if (brick =='H' && Math.random() < 0.4) brick = '#'; // %%% const for H encount
+        switch (brick) {
+         case '-':
+          if (game.ball_passes_lightstep == 1) break;
+         case '=': case '#':
+          new_x = balls[b].x;
+          balls[b].s = balls[b].s == 'l' ? 'r' : 'l';
+          if (b != redo) { // eliminates ball from passing step when bouncing
+            redo = b; // prevents game stuck when the ball is between two bricks
+            b--;
+            continue
+          }
+         break;
+        }
+    
+       break; // case ground -=#HO
+    
+       default:
+        // just falling
+        new_y++;
+        balls[b].s = 'd'; // if set to '', ball may move aside ladder if fell
+      }
+      
+      balls[b].y = new_y;
+
+      if (new_x < 0)
+        balls[b].x = new_x + map[new_y].length
+      else if (new_x >= map[new_y].length)
+        balls[b].x = new_x - map[new_y].length
+      else
+        balls[b].x = new_x;
+
+      map_balls[balls[b].y][balls[b].x] = 1;
+
+    } else // end if j==0
+      
+      if (++balls[b].j >= game.balls_jump[balls[b].jn].seq.length) balls[b].s = game.balls_jump[balls[b].jn].after;
+
+
+      
+    if ((new_x == player.x) && (new_y == player.y)) {
+      // player hit!
+      if (Math.random() * 100 < game.luck) {
+        chatter('luck', b);
+        wc('you are lucky!', null, '999999');
+      } else {
+        wc('gotcha', null, '999999'); // + b + ', x = ' + new_x + ', y = ' + new_y
+        game.gs = 'd';
+        chatter('gotcha', b);
+        start_effect('sparkles', player.x, player.y, { dir: player.s });
+      }
+    }
+
+    balls[b].b = map[balls[b].y][balls[b].x];
+    if (balls[b].b == '*') {
+      // ball is dead
+      map_balls[balls[b].y][balls[b].x] = 0;
+      balls.splice(b, 1);
+      b--;
+      redo;
+    } else {
+      if (balls[b].b != '%') screen_draw_charc(balls[b].x, balls[b].y, 'O');
+      if (balls[b].x == player.x) {
+        var _s = 0;
+        if (balls[b].y + 1 == player.y) { score_add('O'); _s = 1; if (balls[b]._s++ < 4 && Math.random() < 0.1) chatter('scoreO', b); }
+        else if (balls[b].y - 1 == player.y) { score_add('O1'); _s = 1; if (balls[b]._s++ < 4 && Math.random() < 0.1) chatter('scoreO12', b); }
+        else if (balls[b].y - 2 == player.y) { score_add('O2'); _s = 1; if (balls[b]._s++ < 4 && Math.random() < 0.2) chatter('scoreO12', b); }
+        if (_s == 1 && balls[b]._s == 5) {
+          chatter('score_more', b);
+          balls[b]._s == 0;
+        }
+      }
+    }
+
+  }
+
+//  for (var b = balls.length - 1; b >= 0; b-- )
+//    if (balls[b].s == '-')
+//      balls.splice(b, 1);
+}
+
+function game_action() {
+  game_action_player();
+  game_action_balls();
+  
+  switch (game.gs) {
+   case 'r':
+    window.setTimeout("game_action()", game.speed);
+   break;
+
+   case 'c':
+    // complete level
+    if (game.levelset) {
+      
+      //playing levelset
+      game.levelsetindex++;
+      if (game.levelsetindex == levelset[game.levelset].levels.length) {
+        // levelset completed
+        switch (levelset[game.levelset].play_type) {
+         case 'cycle':
+          wc('you completed levelset "' + game.levelset + '", start it from beginning');
+          game.levelsetindex = 0;
+          game.level = levelset[game.levelset].levels[game.levelsetindex];
+          if (game_loadlevel(game.level)) {
+            wc('go!');
+            game.gs = 'r';
+            window.setTimeout("game_action()", game.speed);
+          }
+         break;
+
+         case 'victory':
+          wc('you completed levelset "' + game.levelset + '"');
+          start_effect('circle', player.x, player.y);
+          game.gs = 'w';
+         break;
+        }
+      } else {
+        wc('you completed level "' + game.level + '", advance to next one');
+        game.level = levelset[game.levelset].levels[game.levelsetindex];
+        if (game_loadlevel(game.level)) {
+          wc('go!');
+          game.gs = 'r';
+          window.setTimeout("game_action()", game.speed);
+        }
+      }
+    } else {
+      // standalone level - playing it again
+      wc('playing standalone level again');
+      if (game_loadlevel(game.level)) {
+        wc('go!');
+        game.gs = 'r';
+        window.setTimeout("game_action()", game.speed);
+      }
+    }
+   break;
+
+   case 'd':
+    gravestone_set(player.x, player.y);
+
+    if (game.lives != '∞')
+      game.lives--;
+
+    game.fails++;
+
+    env.span_lives.innerHTML = game.lives;
+    env.span_fails.innerHTML = game.fails;
+
+    if (game.lives == 0) {
+      wc('you failed');
+      game.gs = 'f';
+    } else {
+      wc('you died, try again');
+      if (game_resetlevel(game.level)) {
+        wc('go!');
+        game.gs = 'r';
+        window.setTimeout("game_action()", game.speed);
+      }
+    }
+   break;
+  }
+}
+
+function game_do() {
+//  splash, settings?
+  
+//  game_loadlevelset('test')
+  game_loadlevelset('demo')
+}
+
+
+// MAIN
+
+function main() {
+  canvas = document.getElementById("canvas");
+  if (!canvas.getContext) { alert("<canvas> is not support by the browser"); return }
+
+  env.console = document.getElementById('console_out');
+  env.console.style.display = env.console_visible ? 'block' : 'none';
+  env.span_score = document.getElementById('score');
+  env.span_lives = document.getElementById('lives');
+  env.span_fails = document.getElementById('fails');
+  env.span_mapname = document.getElementById('mapname');
+//  env.span_kbd = document.getElementById('kbd');
+  env.b = document.getElementById('back');
+
+  document.onkeydown = kbd_down;
+  document.onkeyup = kbd_up;
+  
+  var a = [];
+  for (var k in levelset) a.push(k);
+  wc('levelsets: ' + a.join(' '));
+
+  game_do();
+
+}
+
+<!-- ## -->
+</script>
+<!-- /# -->
+
+<!-- #(1_maps.js) --><script type="application/x-javascript" src="1_maps.js"></script><!-- /# -->
+<!-- #(1_maps_reclassic.js) --><script type="application/x-javascript" src="1_maps_reclassic.js"></script><!-- /# -->
+<!-- #(1_maps_classic.js) --><script type="application/x-javascript" src="1_maps_classic.js"></script><!-- /# -->
+<!-- #(1_maps_demo.js) --><script type="application/x-javascript" src="1_maps_demo.js"></script><!-- /# -->
+<!-- #(1_maps_test.js) --><script type="application/x-javascript" src="1_maps_test.js"></script><!-- /# -->
+
+<!-- #> </script> -->
+</head>
+
+<body onload="main();" bgcolor="#000000" text="#FFFFFF">
+  <div id="back" style="background: #000000; padding: 1px; width: 0px; border: 1px solid #CCCCCC; position: relative">
+    <canvas id="canvas" width="0" height="0"></canvas>
+  </div>
+  score: <font color="FFFF00"><b><span id="score">0</span></b></font>
+  lives: <font color="00FF00"><b><span id="lives"></span></b></font>
+  fails: <font color="992200"><b><span id="fails"></span></b></font>
+  <span id="mapname" style="border: 1px solid grey; padding: 2px 5px"></span>
+<!--  kbd: <font color="777777"><b><span id="kbd"></span></b></font> -->
+  <div id="menu" align="center" style="position: absolute; top: 100; left: 0; width: 100%; margin: 0px; display: none">
+    <!--div id="menu_field" style="background: #000F00; border: 1px solid #777777; padding: 10px; width: 300px; opacity: 0.70; filter: alpha(opacity=70);"></div-->
+    <div id="menu_field" style="background: #000F00; border: 1px solid #777777; padding: 10px; width: 300px;"></div>
+  </div>
+  
+  <br><div id="console_out" style="background: #000F00; padding: 1px; border: 1px solid #CCCCCC; font-size: 14px; font-family: courier, fixed"></div>
+  <div id="console_in" style="position: relative; display: none"><form onsubmit="ci(document.getElementById('console_input')); return false">
+    <input type="text" id="console_input" style="width: 100%; color: white; background: #000F00; padding: 1px 1px 1px 10px; border: 1px solid #CCCCCC; font: 14px courier, fixed">
+    <div style="position: absolute; left: 1; top: 4; font-size: 14px; font-family: courier, fixed">&gt;</div>
+  </form></div>
+</body>
+</html>
